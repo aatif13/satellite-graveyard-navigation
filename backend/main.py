@@ -13,33 +13,54 @@ from isro_satellites import ISRO_MISSIONS, is_isro_satellite
 from launch_window import recommend_launch_windows
 from orbit_presets import ORBIT_PRESETS
 from risk_engine import score_orbit_risk
-from tle_processor import fetch_debris_positions, get_cache_age_seconds
+from tle_processor import (
+    CELESTRAK_TARGET_OBJECTS,
+    catalog_is_live,
+    ensure_debris_for_analysis,
+    fetch_debris_positions,
+    get_cache_age_seconds,
+    get_cached_objects,
+    get_catalog_source,
+    is_refreshing,
+    load_disk_cache,
+    refresh_catalog_background,
+    set_refresh_callback,
+)
 from ws_manager import live_manager
 
 load_dotenv()
 
 _live_task: Optional[asyncio.Task] = None
+_event_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+def _on_catalog_ready():
+    if _event_loop:
+        asyncio.run_coroutine_threadsafe(_broadcast_live(), _event_loop)
 
 
 async def _broadcast_live():
-    objects = fetch_debris_positions()
+    objects = get_cached_objects()
     await live_manager.broadcast_debris(objects, round(get_cache_age_seconds(), 1))
 
 
 async def _background_refresh():
+    await asyncio.sleep(120)
     while True:
         try:
-            fetch_debris_positions(force=True)
-            await _broadcast_live()
+            refresh_catalog_background(force=True, on_complete=_on_catalog_ready)
+            await asyncio.sleep(300)
         except Exception:
             pass
-        await asyncio.sleep(60)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _live_task
-    fetch_debris_positions(force=True)
+    global _live_task, _event_loop
+    _event_loop = asyncio.get_event_loop()
+    load_disk_cache()
+    set_refresh_callback(_on_catalog_ready)
+    refresh_catalog_background(on_complete=_on_catalog_ready, force=True, delay_s=0)
     _live_task = asyncio.create_task(_background_refresh())
     yield
     if _live_task:
@@ -64,6 +85,7 @@ app.add_middleware(
 class OrbitAnalysisRequest(BaseModel):
     waypoints: list[dict]
     target_alt_km: Optional[float] = None
+    debris_objects: Optional[list[dict]] = None
 
 
 class MissionQueryRequest(BaseModel):
@@ -72,6 +94,17 @@ class MissionQueryRequest(BaseModel):
 
 def _filter_isro(objects: list[dict]) -> list[dict]:
     return [o for o in objects if o.get("is_isro") or is_isro_satellite(o.get("name", ""))]
+
+
+def _merge_debris_catalog(*sources: list[dict] | None) -> list[dict]:
+    merged: dict[str, dict] = {}
+    for source in sources:
+        if not source:
+            continue
+        for obj in source:
+            key = str(obj.get("norad_id") or obj.get("name") or id(obj)).upper()
+            merged[key] = obj
+    return list(merged.values())
 
 
 def _normalize_waypoints(waypoints: list[dict], target_alt_km: float | None) -> list[dict]:
@@ -94,9 +127,14 @@ def _empty_risk() -> dict:
 
 @app.get("/api/health")
 def health():
+    objects = get_cached_objects()
     return {
         "status": "ok",
         "cache_age_s": round(get_cache_age_seconds(), 1),
+        "catalog_count": len(objects),
+        "catalog_live": catalog_is_live(objects),
+        "catalog_source": get_catalog_source(),
+        "catalog_refreshing": is_refreshing(),
         "ws_clients": live_manager.client_count,
     }
 
@@ -110,35 +148,36 @@ def get_orbit_presets():
 async def websocket_live(ws: WebSocket, isro_only: bool = False):
     await live_manager.connect(ws, isro_only=isro_only)
     try:
-        objects = fetch_debris_positions()
+        objects = get_cached_objects()
+        if not objects:
+            refresh_catalog_background(on_complete=_on_catalog_ready)
         filtered = _filter_isro(objects) if isro_only else objects
         await ws.send_json({
             "type": "connected",
             "count": len(filtered),
             "objects": filtered,
             "cache_age_s": round(get_cache_age_seconds(), 1),
+            "catalog_live": catalog_is_live(objects),
+            "catalog_source": get_catalog_source(),
         })
         while True:
             msg = await ws.receive_json()
             if msg.get("type") == "set_filter":
                 await live_manager.set_filter(ws, msg.get("isro_only", False))
-                objects = fetch_debris_positions()
+                objects = get_cached_objects()
                 filtered = _filter_isro(objects) if msg.get("isro_only") else objects
                 await ws.send_json({
                     "type": "debris_update",
                     "count": len(filtered),
                     "objects": filtered,
                     "cache_age_s": round(get_cache_age_seconds(), 1),
+                    "catalog_live": catalog_is_live(objects),
+                    "catalog_source": get_catalog_source(),
                 })
             elif msg.get("type") == "refresh":
-                objects = fetch_debris_positions(force=True)
-                prefs = await live_manager.get_prefs(ws)
-                if prefs.get("isro_only"):
-                    objects = _filter_isro(objects)
+                refresh_catalog_background(force=True, on_complete=_on_catalog_ready)
                 await ws.send_json({
-                    "type": "debris_update",
-                    "count": len(objects),
-                    "objects": objects,
+                    "type": "refresh_started",
                     "cache_age_s": round(get_cache_age_seconds(), 1),
                 })
     except WebSocketDisconnect:
@@ -152,6 +191,7 @@ def get_debris(
     isro_only: bool = Query(False),
     refresh: bool = Query(False),
 ):
+    """Return the full propagated catalog (10,000+ when Celestrak is reachable)."""
     objects = fetch_debris_positions(force=refresh)
     if isro_only:
         objects = _filter_isro(objects)
@@ -159,6 +199,8 @@ def get_debris(
         "count": len(objects),
         "objects": objects,
         "cache_age_s": round(get_cache_age_seconds(), 1),
+        "catalog_live": catalog_is_live(objects if not isro_only else get_cached_objects()),
+        "catalog_source": get_catalog_source(),
         "live_tracking": True,
     }
 
@@ -176,11 +218,26 @@ def isro_constellation():
 
 @app.post("/api/analyze")
 def analyze_orbit(req: OrbitAnalysisRequest):
-    debris = fetch_debris_positions()
+    server_debris, data_ready = ensure_debris_for_analysis()
+    debris = server_debris
+    if len(server_debris) < 50 and req.debris_objects:
+        debris = _merge_debris_catalog(req.debris_objects, server_debris)
+    data_ready = catalog_is_live(server_debris) or (
+        len(server_debris) >= 50 and not any(o.get("synthetic") for o in server_debris)
+    )
     waypoints = _normalize_waypoints(req.waypoints, req.target_alt_km)
     target_alt = waypoints[0]["alt_km"] if waypoints else (req.target_alt_km or 500)
     risk = score_orbit_risk(waypoints, debris)
-    windows = recommend_launch_windows(target_alt, debris)
+    risk["catalog_size"] = len(debris)
+    risk["data_ready"] = data_ready
+    if any(o.get("synthetic") for o in server_debris):
+        risk.setdefault(
+            "warning",
+            "Offline demo catalog — add Space-Track credentials or refresh Celestrak TLE data",
+        )
+    elif not data_ready and not risk.get("warning"):
+        risk["warning"] = "Limited catalog data — scores may update after TLE sync completes"
+    windows = recommend_launch_windows(target_alt, debris) if debris else []
     return {
         **risk,
         "launch_windows": windows,
@@ -191,12 +248,13 @@ def analyze_orbit(req: OrbitAnalysisRequest):
 @app.post("/api/ai/plan")
 def ai_plan(req: MissionQueryRequest):
     plan = plan_mission(req.query)
-    debris = fetch_debris_positions()
+    debris, _ = ensure_debris_for_analysis()
     waypoints = plan.get("suggested_waypoints", [])
     target_alt = plan.get("target_alt_km") or (waypoints[0].get("alt_km", 550) if waypoints else 550)
     if waypoints:
         normalized = _normalize_waypoints(waypoints, target_alt)
         risk = score_orbit_risk(normalized, debris)
+        risk["catalog_size"] = len(debris)
         windows = recommend_launch_windows(target_alt, debris)
     else:
         risk = _empty_risk()
@@ -214,7 +272,8 @@ def heatmap_data(bins: int = Query(36, ge=12, le=72)):
     for obj in objects:
         lat_bin = min(bins - 1, max(0, int((obj["lat"] + 90) / 180 * bins)))
         lng_bin = min(bins - 1, max(0, int((obj["lng"] + 180) / 360 * bins)))
-        alt_bin = int(obj["alt"] / 100)
+        alt = obj.get("alt_km", obj.get("alt", 0))
+        alt_bin = int(alt / 100)
         key = (lat_bin, lng_bin, alt_bin)
         grid[key] += 1
 

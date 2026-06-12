@@ -60,12 +60,17 @@ export function useLiveDebris({ enabled, isroOnly, onUpdate }) {
       ws.onmessage = (evt) => {
         try {
           const data = JSON.parse(evt.data);
-          if (data.type === 'connected' || data.type === 'debris_update') {
+          if (data.type === 'refresh_started') {
+            onUpdateRef.current?.({ refreshing: true });
+          } else if (data.type === 'connected' || data.type === 'debris_update') {
             setLastPush(data.timestamp || new Date().toISOString());
             onUpdateRef.current?.({
               objects: data.objects || [],
               count: data.count,
               cache_age_s: data.cache_age_s,
+              catalog_live: data.catalog_live,
+              catalog_source: data.catalog_source,
+              refreshing: false,
             });
           }
         } catch {

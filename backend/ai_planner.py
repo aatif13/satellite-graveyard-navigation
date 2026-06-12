@@ -2,8 +2,6 @@ import json
 import os
 import re
 
-import google.generativeai as genai
-
 SYSTEM_PROMPT = """You are an orbital mission planner for ISRO and global space agencies.
 Given a natural-language mission description, respond ONLY with valid JSON (no markdown):
 {
@@ -27,7 +25,7 @@ def _fallback_plan(query: str) -> dict:
     elif "geo" in q or "comms" in q or "gsat" in q:
         alt, orbit_type = 35786, "GEO"
     elif "navic" in q or "irnss" in q:
-        alt, orbit_type = 36000, "MEO"
+        alt, orbit_type = 35786, "MEO"
     elif "650" in q:
         alt, orbit_type = 650, "LEO"
     else:
@@ -58,6 +56,8 @@ def plan_mission(query: str) -> dict:
         return result
 
     try:
+        import google.generativeai as genai
+
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel("gemini-2.5-flash")
         response = model.generate_content(

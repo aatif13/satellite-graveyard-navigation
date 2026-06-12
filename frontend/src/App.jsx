@@ -24,7 +24,7 @@ export default function App() {
   const [isroOnly, setIsroOnly] = useState(false);
   const [viewMode, setViewMode] = useState('points');
   const [liveTracking, setLiveTracking] = useState(true);
-  const [loading, setLoading] = useState(true);
+  const [catalogSyncing, setCatalogSyncing] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [findingSafe, setFindingSafe] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
@@ -34,14 +34,22 @@ export default function App() {
   const [orbitSafeApplied, setOrbitSafeApplied] = useState(false);
   const [error, setError] = useState(null);
   const [prevRiskScore, setPrevRiskScore] = useState(null);
+  const [catalogLive, setCatalogLive] = useState(false);
+  const [catalogSource, setCatalogSource] = useState('cache');
 
   const refreshHeatmap = useCallback(() => {
     fetchHeatmap().then((d) => setHeatmap(d.points)).catch(() => {});
   }, []);
 
-  const handleWsUpdate = useCallback(({ objects }) => {
+  const handleWsUpdate = useCallback(({ objects, refreshing, catalog_live: live, catalog_source: source }) => {
+    if (refreshing) {
+      setCatalogSyncing(true);
+      return;
+    }
     setDebris(objects);
-    setLoading(false);
+    if (live != null) setCatalogLive(live);
+    if (source) setCatalogSource(source);
+    if (objects?.length > 0) setCatalogSyncing(false);
     refreshHeatmap();
   }, [refreshHeatmap]);
 
@@ -56,11 +64,14 @@ export default function App() {
       setError(null);
       const data = await fetchDebris({ isroOnly, refresh });
       setDebris(data.objects);
+      setCatalogLive(Boolean(data.catalog_live));
+      if (data.catalog_source) setCatalogSource(data.catalog_source);
+      if (data.objects?.length > 0 && !refresh) setCatalogSyncing(false);
       refreshHeatmap();
     } catch (err) {
       setError(err.message);
     } finally {
-      setLoading(false);
+      if (!refresh) setCatalogSyncing(false);
     }
   }, [isroOnly, refreshHeatmap]);
 
@@ -69,28 +80,57 @@ export default function App() {
   }, [liveTracking, loadDebrisHttp]);
 
   useEffect(() => {
-    if (!liveTracking) return;
-    const timer = setTimeout(() => {
+    if (!liveTracking) return undefined;
+    const fallback = setTimeout(() => {
       if (debris.length === 0) loadDebrisHttp();
-    }, 5000);
-    return () => clearTimeout(timer);
+    }, 1500);
+    return () => clearTimeout(fallback);
   }, [liveTracking, debris.length, loadDebrisHttp]);
 
   useEffect(() => {
     fetchIsroConstellation().then(setIsroData).catch((e) => setError(e.message));
     fetchHeatmap().then((d) => setHeatmap(d.points)).catch(() => {});
     fetchPresets().then((d) => setPresets(d.presets)).catch((e) => setError(e.message));
+    fetch('/api/health').then((r) => r.json()).then((h) => {
+      setCatalogLive(Boolean(h.catalog_live));
+      if (h.catalog_source) setCatalogSource(h.catalog_source);
+    }).catch(() => {});
   }, []);
 
   const syncWaypointsAlt = (alt) =>
     waypoints.map((wp) => ({ ...wp, alt_km: alt }));
 
-  const runAnalysis = async (wps, alt) => {
-    const result = await analyzeOrbit(wps, alt);
+  const debrisForAnalysis = useCallback(() => {
+    if (!debris.length) return null;
+    return debris
+      .filter((d) => {
+        const a = d.alt_km ?? d.alt ?? 0;
+        return a >= 150 && a <= 2500;
+      })
+      .map((d) => ({
+        name: d.name,
+        lat: d.lat,
+        lng: d.lng,
+        alt: d.alt_km ?? d.alt,
+        alt_km: d.alt_km ?? d.alt,
+        vx: d.vx ?? 0,
+        vy: d.vy ?? 0,
+        vz: d.vz ?? 0,
+        is_isro: d.is_isro,
+      }));
+  }, [debris]);
+
+  const runAnalysis = useCallback(async (wps, alt) => {
+    const catalog = debrisForAnalysis();
+    const result = await analyzeOrbit(
+      wps,
+      alt,
+      catalog?.length >= 50 ? catalog : null,
+    );
     setAnalysis(result);
     setError(null);
     return result;
-  };
+  }, [debrisForAnalysis]);
 
   const handleOrbitClick = ({ lat, lng }) => {
     setWaypoints((prev) => [...prev, { lat, lng, alt_km: selectedAlt }]);
@@ -107,7 +147,8 @@ export default function App() {
     const synced = syncWaypointsAlt(selectedAlt);
     setWaypoints(synced);
     try {
-      await runAnalysis(synced, selectedAlt);
+      const result = await runAnalysis(synced, selectedAlt);
+      if (!result) return;
     } catch (err) {
       setError(err.message);
     } finally {
@@ -152,14 +193,29 @@ export default function App() {
     }
   };
 
-  const handleAiPlan = (result) => {
-    setWaypoints(result.plan.suggested_waypoints || []);
-    setSelectedAlt(result.plan.target_alt_km || 550);
+  const handleAiPlan = async (result) => {
+    const rawAlt = result.plan.target_alt_km || 550;
+    const orbitType = (result.plan.orbit_type || 'LEO').toUpperCase();
+    const isLeo = orbitType === 'LEO' || (orbitType !== 'GEO' && orbitType !== 'MEO');
+    const alt = orbitType === 'GEO'
+      ? 35786
+      : orbitType === 'MEO'
+        ? Math.min(20000, Math.max(2000, rawAlt))
+        : Math.min(2000, Math.max(200, rawAlt));
+    const wps = (result.plan.suggested_waypoints || []).map((wp) => ({ ...wp, alt_km: alt }));
+    setWaypoints(wps);
+    setSelectedAlt(isLeo ? alt : Math.min(2000, alt));
     setMissionName(result.plan.mission_name || 'AI Planned Mission');
     setActivePresetId(null);
     setOrbitSafeApplied(false);
-    setAnalysis({ ...result.risk, launch_windows: result.launch_windows });
-    setError(null);
+    setAnalyzing(true);
+    try {
+      await runAnalysis(wps, alt);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setAnalyzing(false);
+    }
   };
 
   const handleClear = () => {
@@ -171,6 +227,22 @@ export default function App() {
     setSelectedAlt(550);
     setMissionName('Proposed LEO Mission');
     setError(null);
+  };
+
+  useEffect(() => {
+    if (waypoints.length < 2 || analyzing || debris.length < 50) return;
+    const missionAlt = waypoints[0]?.alt_km ?? selectedAlt;
+    const needsRefresh = !analysis || analysis.data_ready === false || analysis.catalog_size < debris.length * 0.5;
+    if (!needsRefresh) return;
+    runAnalysis(waypoints, missionAlt).catch(() => {});
+  }, [debris.length, catalogLive]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleAltChange = (alt) => {
+    setSelectedAlt(alt);
+    setOrbitSafeApplied(false);
+    if (waypoints.length > 0) {
+      setWaypoints((prev) => prev.map((wp) => ({ ...wp, alt_km: alt })));
+    }
   };
 
   const score = analysis?.risk_score ?? 0;
@@ -189,23 +261,34 @@ export default function App() {
           orbitSafeApplied={orbitSafeApplied}
         />
 
-        {loading && (
+        {catalogSyncing && (
           <div className="loading-badge">
             <div className="loading-spinner" />
-            <span>Loading orbital catalog…</span>
+            <span>
+              {debris.length === 0
+                ? (wsConnected ? 'Syncing orbital catalog…' : 'Connecting to mission control…')
+                : 'Refreshing TLE catalog…'}
+            </span>
           </div>
         )}
 
         <div className="globe-title-3d">
           <h1><Satellite size={18} /> Graveyard Navigator</h1>
-          <p>FAR AWAY 2026 · LIVE TLE · SGP4</p>
+          <p>
+            FAR AWAY 2026 ·{' '}
+            {catalogLive
+              ? (catalogSource === 'space-track' ? 'SPACE-TRACK' : 'CELESTRAK')
+              : 'DEMO'}{' '}
+            · SGP4
+          </p>
         </div>
 
         <GlobeHUD
           objectCount={debris.length}
           wsConnected={wsConnected}
           liveTracking={liveTracking}
-          altitude={selectedAlt}
+          catalogLive={catalogLive}
+          altitude={waypoints[0]?.alt_km ?? selectedAlt}
           viewMode={viewMode}
         />
       </div>
@@ -243,7 +326,7 @@ export default function App() {
               max={2000}
               step={10}
               value={selectedAlt}
-              onChange={(e) => { setSelectedAlt(Number(e.target.value)); setOrbitSafeApplied(false); }}
+              onChange={(e) => handleAltChange(Number(e.target.value))}
               className="alt-slider"
             />
             <p className="text-[11px] text-slate-600 mb-3">
@@ -270,8 +353,13 @@ export default function App() {
                 </p>
               )}
 
+              {analysis.warning && (
+                <p className="text-center text-[11px] text-amber-400 mb-2">{analysis.warning}</p>
+              )}
+
               <p className="text-center text-[11px] text-slate-500 mt-2 mb-3">
                 {analysis.nearby_count} objects in band
+                {analysis.catalog_size != null && ` · ${analysis.catalog_size.toLocaleString()} tracked`}
               </p>
 
               <div className="stat-grid mb-3">
@@ -282,7 +370,7 @@ export default function App() {
                 ].map(({ label, val, color }) => (
                   <div key={label} className="stat-3d">
                     <label>{label}</label>
-                    <span style={{ color }}>{val}%</span>
+                    <span style={{ color }}>{val ?? 0} pts</span>
                   </div>
                 ))}
               </div>
@@ -303,7 +391,7 @@ export default function App() {
                   {analysis.launch_windows.slice(0, 3).map((w) => (
                     <div key={`${w.date}-${w.utc_hour}`} className="launch-row">
                       <span>{w.date} {String(w.utc_hour).padStart(2, '0')}:00</span>
-                      <span className={w.risk_pct < 25 ? 'text-green-400' : 'text-amber-400'}>{w.label}</span>
+                      <span className={w.risk_pct < 35 ? 'text-green-400' : 'text-amber-400'}>{w.label}</span>
                     </div>
                   ))}
                 </div>
@@ -322,7 +410,11 @@ export default function App() {
           <ReportButton waypoints={waypoints} analysis={analysis} missionName={missionName} isroMissions={isroData?.missions} />
           <button
             type="button"
-            onClick={() => (liveTracking ? wsRefresh() : loadDebrisHttp(true))}
+            onClick={() => {
+              setCatalogSyncing(true);
+              if (liveTracking) wsRefresh();
+              else loadDebrisHttp(true);
+            }}
             className="flex items-center justify-center gap-1.5 w-full mt-2 text-[11px] text-slate-600 hover:text-cyan-400 transition-colors py-1"
           >
             <RefreshCw size={11} /> Refresh TLE data

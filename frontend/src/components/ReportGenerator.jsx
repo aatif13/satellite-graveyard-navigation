@@ -50,9 +50,9 @@ export function generateMissionReport({ waypoints, analysis, missionName, isroMi
   [
     `Nearby debris objects: ${analysis?.nearby_count ?? 0}`,
     `Recommended safe altitude: ${analysis?.safe_altitude ?? '—'} km`,
-    `Velocity-crossing factor: ${analysis?.risk_breakdown?.velocity_crossing ?? '—'}%`,
-    `Density factor: ${analysis?.risk_breakdown?.density ?? '—'}%`,
-    `Altitude overlap: ${analysis?.risk_breakdown?.altitude_overlap ?? '—'}%`,
+    `Velocity-crossing: ${analysis?.risk_breakdown?.velocity_crossing ?? '—'} pts`,
+    `Density: ${analysis?.risk_breakdown?.density ?? '—'} pts`,
+    `Altitude overlap: ${analysis?.risk_breakdown?.altitude_overlap ?? '—'} pts`,
   ].forEach((line) => { doc.text(line, 14, y); y += 7; });
 
   y += 4;

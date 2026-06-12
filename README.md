@@ -45,7 +45,7 @@ npm run preview
 
 | Feature | Description |
 |---------|-------------|
-| 3D debris globe | globe.gl Earth + live debris points (Celestrak TLE → SGP4) |
+| 3D debris globe | globe.gl Earth + live debris points (Space-Track / Celestrak TLE → SGP4) |
 | Orbit drawing | Click globe to place waypoints, analyze collision risk |
 | Velocity-aware risk | ECEF tangent velocity vs debris SGP4 velocity crossing angle |
 | AI Mission Planner | Natural language → orbit (Gemini 2.5 Flash, keyword fallback) |
@@ -83,7 +83,8 @@ npm run preview
 
 ## Data Sources
 
-- [Celestrak GP Data](https://celestrak.org/NORAD/elements/gp.php) — `FORMAT=TLE` with groups: active, stations, science, weather, gps-ops, analyst + named debris queries
+- [Space-Track.org](https://www.space-track.org) — primary GP catalog (~20k objects; set `SPACE_TRACK_USER` / `SPACE_TRACK_PASSWORD` in `backend/.env`)
+- [Celestrak GP Data](https://celestrak.org/NORAD/elements/gp.php) — automatic fallback when Space-Track is not configured
 - SGP4 propagation via Python `sgp4` library
 - AI via Google Gemini 2.5 Flash (optional)
 
@@ -92,7 +93,8 @@ npm run preview
 ```
 backend/
   main.py            # FastAPI routes + WebSocket
-  tle_processor.py   # Celestrak fetch + SGP4 propagation
+  space_track.py     # Space-Track.org GP catalog (primary)
+  tle_processor.py   # Celestrak fallback + SGP4 propagation
   risk_engine.py     # Velocity-aware risk + DBSCAN zones
   ai_planner.py      # Gemini mission planner
   launch_window.py   # 7-day launch window heuristic

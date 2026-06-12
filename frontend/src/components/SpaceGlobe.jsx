@@ -99,11 +99,7 @@ export default function SpaceGlobe({
     const globe = globeRef.current;
     if (!globe) return;
 
-    if (viewMode === 'heatmap') {
-      if (!heatmapData?.length) {
-        globe.pointsData([]).arcsData([]).ringsData([]);
-        return;
-      }
+    if (viewMode === 'heatmap' && heatmapData?.length) {
       globe
         .pointsData(heatmapData)
         .pointLat((d) => d.lat)
@@ -114,9 +110,9 @@ export default function SpaceGlobe({
           if (d.weight > 0.7) return '#ef4444';
           if (d.weight > 0.4) return '#f59e0b';
           return '#06b6d4';
-        })
-        .ringsData([])
-        .arcsData([]);
+        });
+    } else if (viewMode === 'heatmap') {
+      globe.pointsData([]);
     } else {
       globe
         .pointsData(debrisData || [])

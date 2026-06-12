@@ -35,14 +35,20 @@ class LiveDebrisManager:
             payload = objects
             if prefs.get("isro_only"):
                 from isro_satellites import is_isro_satellite
-                payload = [o for o in objects if is_isro_satellite(o["name"])]
+                payload = [
+                    o for o in objects
+                    if o.get("is_isro") or is_isro_satellite(o.get("name", ""))
+                ]
 
             from datetime import datetime, timezone
+            from tle_processor import catalog_is_live, get_catalog_source
             message = {
                 "type": "debris_update",
                 "count": len(payload),
                 "objects": payload,
                 "cache_age_s": cache_age_s,
+                "catalog_live": catalog_is_live(objects),
+                "catalog_source": get_catalog_source(),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             try:

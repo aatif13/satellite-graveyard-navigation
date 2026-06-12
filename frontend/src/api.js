@@ -21,11 +21,15 @@ export async function fetchIsroConstellation() {
   return res.json();
 }
 
-export async function analyzeOrbit(waypoints, targetAltKm) {
+export async function analyzeOrbit(waypoints, targetAltKm, debrisObjects = null) {
+  const body = { waypoints, target_alt_km: targetAltKm };
+  if (debrisObjects?.length) {
+    body.debris_objects = debrisObjects;
+  }
   const res = await fetch(`${API}/analyze`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ waypoints, target_alt_km: targetAltKm }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error('Analysis failed');
   return res.json();
