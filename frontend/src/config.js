@@ -1,5 +1,8 @@
-/** Production: set VITE_API_BASE_URL=https://your-backend.onrender.com on Vercel */
-export const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+/** Production API base — Render backend. Override with VITE_API_BASE_URL on Vercel. */
+const RENDER_API = 'https://satellite-graveyard-navigation.onrender.com';
+
+export const API_BASE = (import.meta.env.VITE_API_BASE_URL || (import.meta.env.PROD ? RENDER_API : ''))
+  .replace(/\/$/, '');
 
 export function apiUrl(path) {
   const suffix = path.startsWith('/') ? path : `/${path}`;
