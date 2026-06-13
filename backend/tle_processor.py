@@ -1,4 +1,5 @@
 import math
+import os
 import pickle
 import threading
 import time
@@ -37,7 +38,7 @@ TLE_DISK_CACHE = CACHE_DIR / "tle_catalog.pkl"
 
 TLE_TTL = 1800       # 30 min — re-download TLE catalog
 OBJECTS_TTL = 600    # 10 min — re-propagate only
-WORKERS = 8
+WORKERS = int(os.getenv("PROPAGATION_WORKERS", "4"))
 MIN_CATALOG_OBJECTS = 50    # Partial Celestrak responses are treated as empty
 MIN_TLE_TRIPLES = 500       # Do not replace a good on-disk TLE set with a tiny fetch
 CELESTRAK_TARGET_OBJECTS = 400  # Below this, keep trying live Celestrak fetch
@@ -262,9 +263,9 @@ def _propagate_one(entry: tuple[str, Satrec, bool], when: datetime) -> dict | No
 def _propagate_parallel(satrecs: list[tuple[str, Satrec, bool]], when: datetime) -> list[dict]:
     objects: list[dict] = []
     chunk = 800
-    for i in range(0, len(satrecs), chunk):
-        batch = satrecs[i:i + chunk]
-        with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        for i in range(0, len(satrecs), chunk):
+            batch = satrecs[i:i + chunk]
             futures = [pool.submit(_propagate_one, entry, when) for entry in batch]
             for fut in as_completed(futures):
                 obj = fut.result()

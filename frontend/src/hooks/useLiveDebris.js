@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { fetchDebris } from '../api';
 import { wsLiveUrl } from '../config';
 
 export function useLiveDebris({ enabled, isroOnly, onUpdate }) {
   const wsRef = useRef(null);
   const isroRef = useRef(isroOnly);
   const retryRef = useRef(null);
+  const fetchRef = useRef(0);
   const [connected, setConnected] = useState(false);
   const [lastPush, setLastPush] = useState(null);
   const onUpdateRef = useRef(onUpdate);
@@ -18,6 +20,32 @@ export function useLiveDebris({ enabled, isroOnly, onUpdate }) {
   }, []);
 
   const refresh = useCallback(() => send({ type: 'refresh' }), [send]);
+
+  const loadCatalog = useCallback(async (meta) => {
+    const reqId = ++fetchRef.current;
+    try {
+      const full = await fetchDebris({ isroOnly: isroRef.current });
+      if (reqId !== fetchRef.current) return;
+      onUpdateRef.current?.({
+        objects: full.objects || [],
+        count: full.count,
+        cache_age_s: full.cache_age_s,
+        catalog_live: full.catalog_live,
+        catalog_source: full.catalog_source,
+        refreshing: false,
+      });
+    } catch {
+      if (reqId !== fetchRef.current) return;
+      onUpdateRef.current?.({
+        objects: meta?.objects || [],
+        count: meta?.count ?? 0,
+        cache_age_s: meta?.cache_age_s,
+        catalog_live: meta?.catalog_live,
+        catalog_source: meta?.catalog_source,
+        refreshing: false,
+      });
+    }
+  }, []);
 
   useEffect(() => {
     if (!enabled) {
@@ -60,14 +88,18 @@ export function useLiveDebris({ enabled, isroOnly, onUpdate }) {
             onUpdateRef.current?.({ refreshing: true });
           } else if (data.type === 'connected' || data.type === 'debris_update') {
             setLastPush(data.timestamp || new Date().toISOString());
-            onUpdateRef.current?.({
-              objects: data.objects || [],
-              count: data.count,
-              cache_age_s: data.cache_age_s,
-              catalog_live: data.catalog_live,
-              catalog_source: data.catalog_source,
-              refreshing: false,
-            });
+            if (data.objects?.length) {
+              onUpdateRef.current?.({
+                objects: data.objects,
+                count: data.count,
+                cache_age_s: data.cache_age_s,
+                catalog_live: data.catalog_live,
+                catalog_source: data.catalog_source,
+                refreshing: false,
+              });
+            } else {
+              loadCatalog(data);
+            }
           }
         } catch {
           /* ignore malformed frames */
@@ -79,11 +111,12 @@ export function useLiveDebris({ enabled, isroOnly, onUpdate }) {
 
     return () => {
       closed = true;
+      fetchRef.current += 1;
       clearTimeout(retryRef.current);
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [enabled]);
+  }, [enabled, loadCatalog]);
 
   useEffect(() => {
     if (enabled && connected) {

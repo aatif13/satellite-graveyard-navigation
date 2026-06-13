@@ -26,7 +26,7 @@ from tle_processor import (
     refresh_catalog_background,
     set_refresh_callback,
 )
-from ws_manager import live_manager
+from ws_manager import live_manager, _meta_message
 
 load_dotenv()
 
@@ -176,29 +176,24 @@ async def websocket_live(ws: WebSocket, isro_only: bool = False):
         if not objects:
             refresh_catalog_background(on_complete=_on_catalog_ready)
         filtered = _filter_isro(objects) if isro_only else objects
-        await ws.send_json({
-            "type": "connected",
-            "count": len(filtered),
-            "objects": filtered,
-            "cache_age_s": round(get_cache_age_seconds(), 1),
-            "catalog_live": catalog_is_live(objects),
-            "catalog_source": get_catalog_source(),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        await ws.send_json(_meta_message(
+            "connected",
+            len(filtered),
+            round(get_cache_age_seconds(), 1),
+            objects,
+        ))
         while True:
             msg = await ws.receive_json()
             if msg.get("type") == "set_filter":
                 await live_manager.set_filter(ws, msg.get("isro_only", False))
                 objects = get_cached_objects()
                 filtered = _filter_isro(objects) if msg.get("isro_only") else objects
-                await ws.send_json({
-                    "type": "debris_update",
-                    "count": len(filtered),
-                    "objects": filtered,
-                    "cache_age_s": round(get_cache_age_seconds(), 1),
-                    "catalog_live": catalog_is_live(objects),
-                    "catalog_source": get_catalog_source(),
-                })
+                await ws.send_json(_meta_message(
+                    "debris_update",
+                    len(filtered),
+                    round(get_cache_age_seconds(), 1),
+                    objects,
+                ))
             elif msg.get("type") == "refresh":
                 refresh_catalog_background(force=True, on_complete=_on_catalog_ready)
                 await ws.send_json({
