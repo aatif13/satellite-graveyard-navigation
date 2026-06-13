@@ -1,6 +1,15 @@
 import { jsPDF } from 'jspdf';
 import { Download } from 'lucide-react';
 
+/** jsPDF default font is ASCII-only; strip/replace Unicode before doc.text(). */
+function pdfSafeText(text) {
+  return String(text ?? '')
+    .replace(/\u2192/g, '->')
+    .replace(/\u2014/g, '-')
+    .replace(/\u00b7/g, '-')
+    .replace(/[^\x20-\x7E]/g, '');
+}
+
 export function generateMissionReport({ waypoints, analysis, missionName, isroMissions }) {
   const doc = new jsPDF();
   const score = analysis?.risk_score ?? 0;
@@ -13,16 +22,16 @@ export function generateMissionReport({ waypoints, analysis, missionName, isroMi
   doc.text('SATELLITE GRAVEYARD NAVIGATOR', 14, 20);
   doc.setFontSize(10);
   doc.setTextColor(148, 163, 184);
-  doc.text('Mission Risk Report · FAR AWAY 2026 · ISRO-Ready Analysis', 14, 28);
+  doc.text('Mission Risk Report - FAR AWAY 2026 - ISRO-Ready Analysis', 14, 28);
 
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(14);
-  doc.text(missionName || 'Proposed Orbit Mission', 14, 42);
+  doc.text(pdfSafeText(missionName || 'Proposed Orbit Mission'), 14, 42);
 
   const [r, g, b] = score > 50 ? [239, 68, 68] : [34, 197, 94];
   doc.setFontSize(11);
   doc.setTextColor(r, g, b);
-  doc.text(`RISK SCORE: ${score}/100 — ${level}`, 14, 54);
+  doc.text(`RISK SCORE: ${score}/100 - ${level}`, 14, 54);
 
   doc.setTextColor(200, 200, 200);
   doc.setFontSize(9);
@@ -63,7 +72,7 @@ export function generateMissionReport({ waypoints, analysis, missionName, isroMi
   doc.setTextColor(180, 180, 180);
   doc.setFontSize(8);
   (isroMissions || []).slice(0, 5).forEach((m) => {
-    doc.text(`• ${m.name} (${m.type}) @ ${m.alt_km}km`, 14, y);
+    doc.text(pdfSafeText(`• ${m.name} (${m.type}) @ ${m.alt_km}km`), 14, y);
     y += 6;
   });
 
@@ -80,8 +89,13 @@ export function generateMissionReport({ waypoints, analysis, missionName, isroMi
     y += 6;
   } else {
     critical.slice(0, 6).forEach((obj) => {
+      const label = obj.name?.startsWith('1 ') || obj.name?.startsWith('2 ')
+        ? `NORAD ${obj.norad_id || '?'}`
+        : obj.name;
       doc.text(
-        `• ${obj.name} @ ${obj.alt_km}km (crossing: ${obj.crossing_factor})${obj.is_isro ? ' [ISRO]' : ''}`,
+        pdfSafeText(
+          `• ${label} @ ${obj.alt_km}km (crossing: ${obj.crossing_factor})${obj.is_isro ? ' [ISRO]' : ''}`,
+        ),
         14, y,
       );
       y += 6;
@@ -97,7 +111,9 @@ export function generateMissionReport({ waypoints, analysis, missionName, isroMi
   doc.setFontSize(8);
   (analysis?.launch_windows || []).slice(0, 5).forEach((w) => {
     doc.text(
-      `• ${w.date} ${String(w.utc_hour).padStart(2, '0')}:00 UTC — ${w.risk_pct}% risk [${w.label}]`,
+      pdfSafeText(
+        `• ${w.date} ${String(w.utc_hour).padStart(2, '0')}:00 UTC - ${w.risk_pct}% risk [${w.label}]`,
+      ),
       14, y,
     );
     y += 6;
@@ -105,7 +121,7 @@ export function generateMissionReport({ waypoints, analysis, missionName, isroMi
 
   doc.setTextColor(100, 116, 139);
   doc.setFontSize(7);
-  doc.text('Data: Celestrak TLE · SGP4 · Velocity-aware conjunction analysis', 14, 280);
+  doc.text('Data: Celestrak TLE - SGP4 - Velocity-aware conjunction analysis', 14, 280);
   doc.text(`Generated: ${new Date().toISOString()}`, 14, 285);
   doc.save(`mission-risk-report-${Date.now()}.pdf`);
 }

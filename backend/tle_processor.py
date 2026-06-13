@@ -62,6 +62,13 @@ def get_catalog_source() -> str:
     return _catalog_source
 
 
+def _norad_from_line1(l1: str) -> str:
+    parts = l1.split()
+    if len(parts) < 2:
+        return "UNKNOWN"
+    return parts[1].rstrip("U").lstrip("0") or parts[1]
+
+
 def _parse_tle_lines(text: str) -> list[tuple[str, str, str]]:
     lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
     if not lines:
@@ -70,12 +77,39 @@ def _parse_tle_lines(text: str) -> list[tuple[str, str, str]]:
         return []
     if lines[0].startswith("<") or "Query removed" in text:
         return []
-    triples = []
-    for i in range(0, len(lines) - 2, 3):
-        name, l1, l2 = lines[i], lines[i + 1], lines[i + 2]
-        if not l1.startswith("1 ") or not l2.startswith("2 "):
+
+    triples: list[tuple[str, str, str]] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+
+        # 3-line TLE: name + line1 + line2
+        if (
+            i + 2 < len(lines)
+            and lines[i + 1].startswith("1 ")
+            and lines[i + 2].startswith("2 ")
+            and not line.startswith("1 ")
+            and not line.startswith("2 ")
+        ):
+            triples.append((line.lstrip("0 ").strip(), lines[i + 1], lines[i + 2]))
+            i += 3
             continue
-        triples.append((name, l1, l2))
+
+        # 2-line TLE: line1 + line2 (Space-Track GP format)
+        if line.startswith("1 ") and i + 1 < len(lines) and lines[i + 1].startswith("2 "):
+            l1, l2 = line, lines[i + 1]
+            name = f"NORAD {_norad_from_line1(l1)}"
+            if (
+                i > 0
+                and not lines[i - 1].startswith("1 ")
+                and not lines[i - 1].startswith("2 ")
+            ):
+                name = lines[i - 1].lstrip("0 ").strip()
+            triples.append((name, l1, l2))
+            i += 2
+            continue
+
+        i += 1
     return triples
 
 
@@ -265,6 +299,25 @@ def _migrate_legacy_cache():
         pass
 
 
+def _uses_generic_norad_names(names: list[str]) -> bool:
+    """True when most entries are NORAD #### placeholders from a bad TLE parse."""
+    if len(names) < 20:
+        return False
+    sample = names[:500]
+    generic = sum(1 for name in sample if str(name).startswith("NORAD "))
+    return generic >= len(sample) * 0.75
+
+
+def _clear_disk_cache() -> None:
+    global _satrec_cache
+    _satrec_cache = None
+    for path in (DISK_CACHE, TLE_DISK_CACHE):
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 def load_disk_cache() -> bool:
     """Load cached catalog from disk for instant startup."""
     global _tle_catalog, _tle_fetched_at, _satrec_cache
@@ -286,6 +339,19 @@ def load_disk_cache() -> bool:
                     loaded = True
     except Exception:
         pass
+
+    tle_names = [name for name, _, _ in _tle_catalog]
+    obj_names = [o.get("name", "") for o in (_cache.get("objects") or [])]
+    if _uses_generic_norad_names(tle_names) or _uses_generic_norad_names(obj_names):
+        print("Stale NORAD-only cache detected — clearing catalog for refresh with proper names")
+        _tle_catalog = []
+        _tle_fetched_at = 0.0
+        _cache["objects"] = []
+        _cache["fetched_at"] = 0.0
+        _satrec_cache = None
+        _clear_disk_cache()
+        loaded = False
+
     _satrec_cache = None
     if _cache.get("objects"):
         global _catalog_source
@@ -321,17 +387,25 @@ def _activate_fallback_catalog() -> list[dict]:
     return objects
 
 
+def _norad_key(l1: str) -> str:
+    parts = l1.split()
+    if len(parts) < 2:
+        return l1.strip()
+    return parts[1].rstrip("U").upper()
+
+
 def _merge_tle_triples(
     existing: list[tuple[str, str, str]],
     incoming: list[tuple[str, str, str]],
 ) -> list[tuple[str, str, str]]:
-    seen = {name.strip().upper() for name, _, _ in existing}
-    merged = list(existing)
-    for name, l1, l2 in incoming:
-        norm = name.strip().upper()
-        if norm in seen:
+    seen_norad: set[str] = set()
+    merged: list[tuple[str, str, str]] = []
+
+    for name, l1, l2 in existing + incoming:
+        key = _norad_key(l1)
+        if key in seen_norad:
             continue
-        seen.add(norm)
+        seen_norad.add(key)
         merged.append((name.strip(), l1, l2))
     return merged
 

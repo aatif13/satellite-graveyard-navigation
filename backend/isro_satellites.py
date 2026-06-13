@@ -1,10 +1,11 @@
 """Known ISRO / Indian space assets for constellation filtering."""
+import re
 
 ISRO_SATELLITES = {
     "CARTOSAT", "RESOURCESAT", "RISAT", "OCEANSAT", "INSAT", "GSAT", "IRNSS",
     "NAVIC", "EMISAT", "HYSIS", "MICROSAT", "ANAND", "EOS", "CMS", "IDSN",
     "CHANDRAYAAN", "MANGALYAAN", "ADITYA", "XPOSAT", "NISAR", "SPADEX",
-    "GAGANYAAN", "VYOM", "ASTRA", "STUDSAT", "JUGNU", "PRATHAM", "SWAYAM",
+    "GAGANYAAN", "VYOM", "STUDSAT", "JUGNU", "PRATHAM", "SWAYAM",
     "BHUVAN", "SCATSAT", "SARAL", "MEGHATROPIQUES", "KALPANA", "EDUSAT",
     "KALAMSAT", "YOUTHSAT", "TECHSAR", "IMS", "HAMSAT", "CUTE", "STEPS",
 }
@@ -22,5 +23,6 @@ ISRO_MISSIONS = [
 
 
 def is_isro_satellite(name: str) -> bool:
-    upper = name.upper()
-    return any(token in upper for token in ISRO_SATELLITES)
+    """Match ISRO tokens as whole words (avoids false hits like EOS inside GEOS)."""
+    words = re.findall(r"[A-Z0-9]+", (name or "").upper())
+    return any(word in ISRO_SATELLITES for word in words)

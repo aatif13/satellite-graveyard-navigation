@@ -15,6 +15,7 @@ import Section from './components/Section';
 import { useLiveDebris } from './hooks/useLiveDebris';
 import {
   fetchDebris, fetchHeatmap, fetchIsroConstellation, analyzeOrbit, fetchPresets,
+  fetchHealth,
 } from './api';
 
 export default function MissionControl({ onHome }) {
@@ -45,6 +46,12 @@ export default function MissionControl({ onHome }) {
     fetchHeatmap().then((d) => setHeatmap(d.points)).catch(() => {});
   }, []);
 
+  const refreshIsroData = useCallback(() => {
+    fetchIsroConstellation()
+      .then(setIsroData)
+      .catch((e) => setError(e.message));
+  }, []);
+
   const handleWsUpdate = useCallback(({ objects, refreshing, catalog_live: live, catalog_source: source }) => {
     if (refreshing) {
       setCatalogSyncing(true);
@@ -56,12 +63,6 @@ export default function MissionControl({ onHome }) {
     setCatalogSyncing(false);
   }, []);
 
-  const { connected: wsConnected, refresh: wsRefresh } = useLiveDebris({
-    enabled: liveTracking,
-    isroOnly,
-    onUpdate: handleWsUpdate,
-  });
-
   const loadDebrisHttp = useCallback(async (refresh = false) => {
     try {
       setError(null);
@@ -70,12 +71,19 @@ export default function MissionControl({ onHome }) {
       setCatalogLive(Boolean(data.catalog_live));
       if (data.catalog_source) setCatalogSource(data.catalog_source);
       refreshHeatmap();
+      if (refresh) refreshIsroData();
     } catch (err) {
       setError(err.message);
     } finally {
       setCatalogSyncing(false);
     }
-  }, [isroOnly, refreshHeatmap]);
+  }, [isroOnly, refreshHeatmap, refreshIsroData]);
+
+  const { connected: wsConnected, refresh: wsRefresh } = useLiveDebris({
+    enabled: liveTracking,
+    isroOnly,
+    onUpdate: handleWsUpdate,
+  });
 
   useEffect(() => {
     if (!liveTracking) loadDebrisHttp();
@@ -94,19 +102,25 @@ export default function MissionControl({ onHome }) {
   }, [viewMode, refreshHeatmap]);
 
   useEffect(() => {
-    fetchIsroConstellation().then(setIsroData).catch((e) => setError(e.message));
+    if (!catalogSyncing && debris.length > 500 && (isroData?.tracked_isro_count ?? 0) === 0) {
+      refreshIsroData();
+    }
+  }, [catalogSyncing, debris.length, isroData?.tracked_isro_count, refreshIsroData]);
+
+  useEffect(() => {
+    refreshIsroData();
     fetchHeatmap().then((d) => setHeatmap(d.points)).catch(() => {});
     const loadPresets = () => fetchPresets()
       .then((d) => { if (d.presets?.length) setPresets(d.presets); })
       .catch((e) => setError(e.message));
     loadPresets();
     const presetRetry = window.setTimeout(loadPresets, 2500);
-    fetch('/api/health').then((r) => r.json()).then((h) => {
+    fetchHealth().then((h) => {
       setCatalogLive(Boolean(h.catalog_live));
       if (h.catalog_source) setCatalogSource(h.catalog_source);
     }).catch(() => {});
     return () => clearTimeout(presetRetry);
-  }, []);
+  }, [refreshIsroData]);
 
   const syncWaypointsAlt = (alt) =>
     waypoints.map((wp) => ({ ...wp, alt_km: alt }));
@@ -457,6 +471,7 @@ export default function MissionControl({ onHome }) {
             type="button"
             onClick={() => {
               setCatalogSyncing(true);
+              refreshIsroData();
               if (liveTracking) wsRefresh();
               else loadDebrisHttp(true);
             }}

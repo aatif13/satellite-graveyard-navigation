@@ -1,3 +1,11 @@
+function displayName(obj) {
+  const name = obj.name || '';
+  if (name.startsWith('1 ') || name.startsWith('2 ')) {
+    return obj.norad_id ? `NORAD ${obj.norad_id}` : 'Unknown object';
+  }
+  return name || (obj.norad_id ? `NORAD ${obj.norad_id}` : 'Unknown object');
+}
+
 export default function CriticalObjectsPanel({ objects }) {
   const top = (objects || []).slice(0, 5);
   if (!top.length) return null;
@@ -8,7 +16,7 @@ export default function CriticalObjectsPanel({ objects }) {
       <ul className="critical-panel__list">
         {top.map((obj) => (
           <li key={`${obj.name}-${obj.norad_id}`}>
-            <span className="critical-panel__name">{obj.name}</span>
+            <span className="critical-panel__name">{displayName(obj)}</span>
             <span className="critical-panel__meta">
               {obj.norad_id ? `NORAD ${obj.norad_id}` : 'NORAD —'}
               {' · '}

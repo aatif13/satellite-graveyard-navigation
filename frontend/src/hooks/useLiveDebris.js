@@ -1,9 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-
-function wsUrl() {
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${window.location.host}/api/ws/live`;
-}
+import { wsLiveUrl } from '../config';
 
 export function useLiveDebris({ enabled, isroOnly, onUpdate }) {
   const wsRef = useRef(null);
@@ -37,7 +33,7 @@ export function useLiveDebris({ enabled, isroOnly, onUpdate }) {
 
     const connect = () => {
       if (closed) return;
-      const ws = new WebSocket(`${wsUrl()}?isro_only=${isroRef.current}`);
+      const ws = new WebSocket(`${wsLiveUrl()}?isro_only=${isroRef.current}`);
       wsRef.current = ws;
 
       ws.onopen = () => {

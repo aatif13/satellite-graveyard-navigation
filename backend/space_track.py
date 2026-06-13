@@ -26,14 +26,45 @@ def _credentials() -> tuple[str, str] | None:
     return None
 
 
+def _norad_from_line1(l1: str) -> str:
+    parts = l1.split()
+    if len(parts) < 2:
+        return "UNKNOWN"
+    return parts[1].rstrip("U").lstrip("0") or parts[1]
+
+
 def _parse_tle_text(text: str) -> list[tuple[str, str, str]]:
     lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
     triples: list[tuple[str, str, str]] = []
-    for i in range(0, len(lines) - 2, 3):
-        name, l1, l2 = lines[i], lines[i + 1], lines[i + 2]
-        if not l1.startswith("1 ") or not l2.startswith("2 "):
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+
+        if (
+            i + 2 < len(lines)
+            and lines[i + 1].startswith("1 ")
+            and lines[i + 2].startswith("2 ")
+            and not line.startswith("1 ")
+            and not line.startswith("2 ")
+        ):
+            triples.append((line.strip(), lines[i + 1], lines[i + 2]))
+            i += 3
             continue
-        triples.append((name.strip(), l1, l2))
+
+        if line.startswith("1 ") and i + 1 < len(lines) and lines[i + 1].startswith("2 "):
+            l1, l2 = line, lines[i + 1]
+            name = f"NORAD {_norad_from_line1(l1)}"
+            if (
+                i > 0
+                and not lines[i - 1].startswith("1 ")
+                and not lines[i - 1].startswith("2 ")
+            ):
+                name = lines[i - 1].lstrip("0 ").strip()
+            triples.append((name, l1, l2))
+            i += 2
+            continue
+
+        i += 1
     return triples
 
 
@@ -83,11 +114,16 @@ def fetch_space_track_catalog() -> list[tuple[str, str, str]] | None:
             return None
         resp.raise_for_status()
 
-        triples = _parse_tle_text(resp.text)
-        if len(triples) < 500:
+        # JSON includes OBJECT_NAME (required for ISRO tagging); TLE text is often 2-line without names.
+        try:
             json_resp = session.get(GP_JSON_URL, timeout=180)
             json_resp.raise_for_status()
             triples = _parse_gp_json(json_resp.json())
+        except requests.RequestException:
+            triples = []
+
+        if len(triples) < 500:
+            triples = _parse_tle_text(resp.text)
 
         if triples:
             print(f"Space-Track: loaded {len(triples)} TLE triples")
