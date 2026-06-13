@@ -8,7 +8,7 @@ const EXAMPLES = [
   'GSAT over India',
 ];
 
-export default function AIMissionPlanner({ onPlanReady, onError, loading, setLoading }) {
+export default function AIMissionPlanner({ onPlanReady, onError, loading, setLoading, riskScore }) {
   const [query, setQuery] = useState('');
   const [lastPlan, setLastPlan] = useState(null);
 
@@ -29,24 +29,24 @@ export default function AIMissionPlanner({ onPlanReady, onError, loading, setLoa
 
   return (
     <div>
-      <form onSubmit={handleSubmit} className="flex gap-2">
+      <form onSubmit={handleSubmit} className="btn-row">
         <input
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Describe your mission…"
-          className="input-field flex-1"
+          className="input-field"
+          style={{ flex: 1 }}
         />
         <button
           type="submit"
           disabled={loading}
-          className="btn-analyze"
-          style={{ flex: 'none', padding: '9px 14px' }}
+          className="btn-primary btn-primary--icon"
         >
           {loading ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
         </button>
       </form>
-      <div className="flex gap-1.5 mt-2 flex-wrap">
+      <div className="chip-row">
         {EXAMPLES.map((ex) => (
           <button key={ex} type="button" onClick={() => setQuery(ex)} className="chip-btn">
             {ex}
@@ -55,13 +55,18 @@ export default function AIMissionPlanner({ onPlanReady, onError, loading, setLoa
       </div>
       {lastPlan?.plan && (
         <div className="ai-result">
-          <p className="font-semibold text-cyan-400">{lastPlan.plan.mission_name}</p>
-          <p className="text-slate-400 mt-1">{lastPlan.plan.rationale}</p>
-          <p className="text-slate-500 mt-1">
-            {lastPlan.plan.target_alt_km} km · Risk{' '}
-            <span className={lastPlan.risk?.risk_score > 50 ? 'text-red-400' : 'text-green-400'}>
-              {lastPlan.risk?.risk_score}/100
-            </span>
+          <p className="ai-result-title">{lastPlan.plan.mission_name}</p>
+          <p className="ai-result-body">{lastPlan.plan.rationale}</p>
+          <p className="ai-result-meta">
+            {lastPlan.plan.target_alt_km} km
+            {riskScore != null && (
+              <>
+                {' · Risk '}
+                <span className={riskScore > 50 ? 'text-danger' : 'text-success'}>
+                  {riskScore}/100
+                </span>
+              </>
+            )}
           </p>
         </div>
       )}

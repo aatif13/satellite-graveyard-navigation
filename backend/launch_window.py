@@ -115,8 +115,12 @@ def recommend_launch_windows(
         day = now + timedelta(days=day_offset)
         for hour in slot_hours:
             t = day.replace(hour=hour, minute=0, second=0, microsecond=0)
+            if day_offset == 0 and t <= now:
+                continue
             if use_debris_proxy:
                 count, spread = _altitude_flux_from_debris(debris, target_alt_km)
+                # Vary slots when satrec propagation is unavailable
+                count = max(0, int(count * (0.85 + 0.15 * math.sin(math.radians(hour * 30 + day_offset * 45)))))
             else:
                 count, spread = _altitude_flux_at_time(satrecs, t, target_alt_km)
             modifier = _slot_geometry_modifier(hour, day_offset, spread)

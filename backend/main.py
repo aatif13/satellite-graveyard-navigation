@@ -14,7 +14,6 @@ from launch_window import recommend_launch_windows
 from orbit_presets import ORBIT_PRESETS
 from risk_engine import score_orbit_risk
 from tle_processor import (
-    CELESTRAK_TARGET_OBJECTS,
     catalog_is_live,
     ensure_debris_for_analysis,
     fetch_debris_positions,
@@ -23,6 +22,7 @@ from tle_processor import (
     get_catalog_source,
     is_refreshing,
     load_disk_cache,
+    needs_network_refresh,
     refresh_catalog_background,
     set_refresh_callback,
 )
@@ -48,7 +48,10 @@ async def _background_refresh():
     await asyncio.sleep(120)
     while True:
         try:
-            refresh_catalog_background(force=True, on_complete=_on_catalog_ready)
+            refresh_catalog_background(
+                force=needs_network_refresh(),
+                on_complete=_on_catalog_ready,
+            )
             await asyncio.sleep(300)
         except Exception:
             pass
@@ -60,7 +63,11 @@ async def lifespan(app: FastAPI):
     _event_loop = asyncio.get_event_loop()
     load_disk_cache()
     set_refresh_callback(_on_catalog_ready)
-    refresh_catalog_background(on_complete=_on_catalog_ready, force=True, delay_s=0)
+    cached = get_cached_objects()
+    if catalog_is_live(cached):
+        refresh_catalog_background(on_complete=_on_catalog_ready, force=False, delay_s=0)
+    else:
+        refresh_catalog_background(on_complete=_on_catalog_ready, force=True, delay_s=0)
     _live_task = asyncio.create_task(_background_refresh())
     yield
     if _live_task:
@@ -76,7 +83,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -122,7 +129,24 @@ def _empty_risk() -> dict:
         "nearby_count": 0,
         "critical_objects": [],
         "risk_breakdown": {"density": 0, "velocity_crossing": 0, "altitude_overlap": 0},
+        "data_ready": False,
+        "catalog_size": 0,
     }
+
+
+def _enrich_risk_metadata(risk: dict, server_debris: list[dict]) -> dict:
+    data_ready = catalog_is_live(server_debris) or (
+        len(server_debris) >= 50 and not any(o.get("synthetic") for o in server_debris)
+    )
+    risk["data_ready"] = data_ready
+    if any(o.get("synthetic") for o in server_debris):
+        risk.setdefault(
+            "warning",
+            "Offline demo catalog — add Space-Track credentials or refresh Celestrak TLE data",
+        )
+    elif not data_ready and not risk.get("warning"):
+        risk["warning"] = "Limited catalog data — scores may update after TLE sync completes"
+    return risk
 
 
 @app.get("/api/health")
@@ -159,6 +183,7 @@ async def websocket_live(ws: WebSocket, isro_only: bool = False):
             "cache_age_s": round(get_cache_age_seconds(), 1),
             "catalog_live": catalog_is_live(objects),
             "catalog_source": get_catalog_source(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         })
         while True:
             msg = await ws.receive_json()
@@ -248,16 +273,17 @@ def analyze_orbit(req: OrbitAnalysisRequest):
 @app.post("/api/ai/plan")
 def ai_plan(req: MissionQueryRequest):
     plan = plan_mission(req.query)
-    debris, _ = ensure_debris_for_analysis()
+    server_debris, _ = ensure_debris_for_analysis()
     waypoints = plan.get("suggested_waypoints", [])
     target_alt = plan.get("target_alt_km") or (waypoints[0].get("alt_km", 550) if waypoints else 550)
     if waypoints:
         normalized = _normalize_waypoints(waypoints, target_alt)
-        risk = score_orbit_risk(normalized, debris)
-        risk["catalog_size"] = len(debris)
-        windows = recommend_launch_windows(target_alt, debris)
+        risk = score_orbit_risk(normalized, server_debris)
+        risk["catalog_size"] = len(server_debris)
+        risk = _enrich_risk_metadata(risk, server_debris)
+        windows = recommend_launch_windows(target_alt, server_debris)
     else:
-        risk = _empty_risk()
+        risk = _enrich_risk_metadata(_empty_risk(), server_debris)
         windows = []
     return {"plan": plan, "risk": risk, "launch_windows": windows}
 
@@ -266,7 +292,6 @@ def ai_plan(req: MissionQueryRequest):
 def heatmap_data(bins: int = Query(36, ge=12, le=72)):
     objects = fetch_debris_positions()
     from collections import defaultdict
-    import math
 
     grid: dict = defaultdict(int)
     for obj in objects:

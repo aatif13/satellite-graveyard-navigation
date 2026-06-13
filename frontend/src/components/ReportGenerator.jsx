@@ -116,8 +116,7 @@ export default function ReportButton({ waypoints, analysis, missionName, isroMis
       type="button"
       onClick={() => generateMissionReport({ waypoints, analysis, missionName, isroMissions })}
       disabled={!analysis}
-      className="btn-safe"
-      style={{ background: '#1e293b', border: '1px solid #334155' }}
+      className="btn-outline btn-outline--block"
     >
       <Download size={14} />
       Download Report

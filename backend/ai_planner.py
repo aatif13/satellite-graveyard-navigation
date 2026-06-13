@@ -25,7 +25,7 @@ def _fallback_plan(query: str) -> dict:
     elif "geo" in q or "comms" in q or "gsat" in q:
         alt, orbit_type = 35786, "GEO"
     elif "navic" in q or "irnss" in q:
-        alt, orbit_type = 35786, "MEO"
+        alt, orbit_type = 35786, "MEO"  # inclined MEO constellation ~GEO altitude
     elif "650" in q:
         alt, orbit_type = 650, "LEO"
     else:

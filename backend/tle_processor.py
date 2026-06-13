@@ -18,18 +18,17 @@ USER_AGENT = "SatelliteGraveyardNavigator/1.0 (FAR-AWAY-2026)"
 
 GP_BASE = "https://celestrak.org/NORAD/elements/gp.php"
 
-# SATCAT endpoints are deprecated (often return 1 invalid row); tried first for compatibility.
-CELESTRAK_TLE_URLS = [
-    "https://celestrak.org/SATCAT/tle.php?GROUP=active&FORMAT=tle",
-    "https://celestrak.org/SATCAT/tle.php?GROUP=debris&FORMAT=tle",
-    "https://celestrak.org/SATCAT/tle.php?GROUP=starlink&FORMAT=tle",
-]
+# SATCAT endpoints are deprecated (403/timeout); gp.php is the live source.
+CELESTRAK_TLE_URLS: list[str] = []
 
 # gp.php is the live Celestrak source (10,000+ objects).
 CELESTRAK_GP_GROUPS = [
-    "starlink", "active", "stations", "debris", "oneweb",
-    "last-30-days", "science", "weather", "gps-ops", "galileo",
+    "active", "stations", "debris", "science", "weather", "gps-ops", "galileo",
+    "last-30-days", "oneweb", "starlink",
 ]
+
+CELESTRAK_HEAVY_GROUPS = {"starlink", "oneweb"}
+CELESTRAK_EARLY_EXIT = 5000
 
 # Outside backend/ so uvicorn --reload does not restart on cache writes
 CACHE_DIR = Path(__file__).parent.parent / ".data" / "cache"
@@ -41,7 +40,7 @@ OBJECTS_TTL = 600    # 10 min — re-propagate only
 WORKERS = 8
 MIN_CATALOG_OBJECTS = 50    # Partial Celestrak responses are treated as empty
 MIN_TLE_TRIPLES = 500       # Do not replace a good on-disk TLE set with a tiny fetch
-CELESTRAK_TARGET_OBJECTS = 1000  # Below this, keep trying live Celestrak fetch
+CELESTRAK_TARGET_OBJECTS = 400  # Below this, keep trying live Celestrak fetch
 
 _cache: dict = {"objects": [], "fetched_at": 0.0}
 _tle_catalog: list[tuple[str, str, str]] = []
@@ -125,8 +124,9 @@ def _fetch_one_url(
             if batch:
                 break
         except requests.RequestException as exc:
-            print(f"Celestrak fetch failed ({url}): {exc}")
-            time.sleep(4 * (attempt + 1))
+            if attempt == retries - 1:
+                print(f"Celestrak fetch failed ({url}): {exc}")
+            time.sleep(min(4 * (attempt + 1), 8))
 
     added: list[tuple[str, str, str]] = []
     for name, l1, l2 in batch:
@@ -150,23 +150,26 @@ def _fetch_urls(urls: list[str], timeout: int = 45) -> list[tuple[str, str, str]
 
 
 def _fetch_celestrak_catalog() -> list[tuple[str, str, str]]:
-    """Fetch TLEs from Celestrak; fall back to gp.php when SATCAT returns too few."""
+    """Fetch TLEs from Celestrak gp.php; lighter groups first, heavy groups last."""
     seen_names: set[str] = set()
     triples: list[tuple[str, str, str]] = []
 
     for url in CELESTRAK_TLE_URLS:
         triples.extend(_fetch_one_url(url, seen_names, timeout=15, retries=2))
 
-    priority = ["starlink", "active"]
-    rest = [g for g in CELESTRAK_GP_GROUPS if g not in priority]
-    for group in priority + rest:
+    for group in CELESTRAK_GP_GROUPS:
         url = f"{GP_BASE}?GROUP={group}&FORMAT=TLE"
-        retries = 5 if group in priority else 3
-        batch = _fetch_one_url(url, seen_names, timeout=60, retries=retries)
+        is_heavy = group in CELESTRAK_HEAVY_GROUPS
+        retries = 1 if is_heavy else 2
+        timeout = 18 if is_heavy else 30
+        batch = _fetch_one_url(url, seen_names, timeout=timeout, retries=retries)
         if batch:
             triples.extend(batch)
-            if len(triples) >= MIN_TLE_TRIPLES and group in priority:
+            if len(triples) >= MIN_TLE_TRIPLES:
                 _persist_tle_catalog(triples)
+            if len(triples) >= CELESTRAK_EARLY_EXIT and not is_heavy:
+                print(f"Celestrak: early exit with {len(triples)} TLEs (skipping heavy groups)")
+                break
 
     print(f"Fetched {len(triples)} TLE triples from Celestrak")
     return triples
@@ -358,6 +361,10 @@ def _download_tle_catalog(force: bool = False) -> list[tuple[str, str, str]]:
             triples = fetched
             source = "celestrak"
         elif _tle_catalog:
+            print(
+                f"Celestrak unavailable — keeping disk cache "
+                f"({len(_tle_catalog)} TLEs, {len(_cache.get('objects') or [])} propagated)"
+            )
             return _tle_catalog
         else:
             triples = list(SEED_TLE_TRIPLES)
@@ -367,6 +374,21 @@ def _download_tle_catalog(force: bool = False) -> list[tuple[str, str, str]]:
         _persist_tle_catalog(triples)
         _catalog_source = source
     return _tle_catalog or triples
+
+
+def get_tle_age_seconds() -> float:
+    if not _tle_fetched_at:
+        return -1
+    return time.time() - _tle_fetched_at
+
+
+def needs_network_refresh() -> bool:
+    """True when a Celestrak/Space-Track download should be attempted."""
+    objects = _cache.get("objects") or []
+    if not objects or not catalog_is_live(objects):
+        return True
+    tle_age = get_tle_age_seconds()
+    return tle_age < 0 or tle_age >= TLE_TTL
 
 
 def get_tle_catalog() -> list[tuple[str, str, str]]:

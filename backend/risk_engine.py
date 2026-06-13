@@ -223,6 +223,9 @@ def score_orbit_risk(proposed_orbit: list[dict], debris: list[dict]) -> dict:
         if contribution > 0.55:
             critical_objects.append({
                 "name": d["name"],
+                "norad_id": d.get("norad_id"),
+                "lat": d.get("lat"),
+                "lng": d.get("lng"),
                 "alt_km": round(_debris_alt(d), 1),
                 "crossing_factor": round(crossing, 3),
                 "is_isro": is_isro_satellite(d["name"]),

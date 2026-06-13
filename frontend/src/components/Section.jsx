@@ -1,13 +1,13 @@
 export default function Section({ title, icon: Icon, children, accent = false }) {
   return (
-    <section className={`card-3d ${accent ? 'card-3d-accent' : ''}`}>
+    <section className={`panel-section ${accent ? 'panel-section--highlight' : ''}`}>
       {title && (
-        <div className="card-label">
-          {Icon && <Icon size={14} className="text-cyan-500" />}
+        <div className="panel-section-head">
+          {Icon && <Icon size={15} strokeWidth={1.75} />}
           <span>{title}</span>
         </div>
       )}
-      {children}
+      <div className="panel-section-body">{children}</div>
     </section>
   );
 }
