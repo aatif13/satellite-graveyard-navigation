@@ -10,10 +10,37 @@ function pdfSafeText(text) {
     .replace(/[^\x20-\x7E]/g, '');
 }
 
-export function generateMissionReport({ waypoints, analysis, missionName, isroMissions }) {
+function objectLabel(obj) {
+  const name = String(obj.name || '').trim();
+  if (/^[12]\s+\d/.test(name)) {
+    return obj.norad_id ? `NORAD ${obj.norad_id}` : 'Unknown object';
+  }
+  if (name.startsWith('NORAD ')) return name;
+  return name || (obj.norad_id ? `NORAD ${obj.norad_id}` : 'Unknown object');
+}
+
+function riskLevel(score) {
+  if (score > 70) return 'DANGEROUS';
+  if (score > 40) return 'CAUTION';
+  return 'SAFE';
+}
+
+function catalogSourceLabel(source) {
+  if (source === 'space-track') return 'Space-Track TLE';
+  if (source === 'celestrak') return 'Celestrak TLE';
+  return 'TLE catalog';
+}
+
+export function generateMissionReport({
+  waypoints,
+  analysis,
+  missionName,
+  isroMissions,
+  catalogSource = 'cache',
+}) {
   const doc = new jsPDF();
   const score = analysis?.risk_score ?? 0;
-  const level = score > 70 ? 'DANGEROUS' : score > 40 ? 'CAUTION' : 'SAFE';
+  const level = riskLevel(score);
 
   doc.setFillColor(3, 7, 18);
   doc.rect(0, 0, 210, 297, 'F');
@@ -58,16 +85,26 @@ export function generateMissionReport({ waypoints, analysis, missionName, isroMi
 
   [
     `Nearby debris objects: ${analysis?.nearby_count ?? 0}`,
+    analysis?.catalog_size != null ? `Catalog size: ${analysis.catalog_size.toLocaleString()} tracked` : null,
     `Recommended safe altitude: ${analysis?.safe_altitude ?? '—'} km`,
     `Velocity-crossing: ${analysis?.risk_breakdown?.velocity_crossing ?? '—'} pts`,
     `Density: ${analysis?.risk_breakdown?.density ?? '—'} pts`,
     `Altitude overlap: ${analysis?.risk_breakdown?.altitude_overlap ?? '—'} pts`,
-  ].forEach((line) => { doc.text(line, 14, y); y += 7; });
+  ].filter(Boolean).forEach((line) => { doc.text(line, 14, y); y += 7; });
+
+  if (analysis?.warning) {
+    doc.setTextColor(212, 160, 23);
+    doc.setFontSize(8);
+    doc.text(pdfSafeText(`Note: ${analysis.warning}`), 14, y);
+    y += 8;
+    doc.setTextColor(200, 200, 200);
+    doc.setFontSize(9);
+  }
 
   y += 4;
   doc.setTextColor(249, 115, 22);
   doc.setFontSize(10);
-  doc.text('ISRO Constellation Context', 14, y);
+  doc.text('ISRO Reference Missions (not live positions)', 14, y);
   y += 8;
   doc.setTextColor(180, 180, 180);
   doc.setFontSize(8);
@@ -79,7 +116,7 @@ export function generateMissionReport({ waypoints, analysis, missionName, isroMi
   y += 4;
   doc.setTextColor(6, 182, 212);
   doc.setFontSize(10);
-  doc.text('Critical Conjunction Objects', 14, y);
+  doc.text('Critical Conjunction Objects (heuristic ranking)', 14, y);
   y += 8;
   doc.setTextColor(180, 180, 180);
   doc.setFontSize(8);
@@ -89,12 +126,9 @@ export function generateMissionReport({ waypoints, analysis, missionName, isroMi
     y += 6;
   } else {
     critical.slice(0, 6).forEach((obj) => {
-      const label = obj.name?.startsWith('1 ') || obj.name?.startsWith('2 ')
-        ? `NORAD ${obj.norad_id || '?'}`
-        : obj.name;
       doc.text(
         pdfSafeText(
-          `• ${label} @ ${obj.alt_km}km (crossing: ${obj.crossing_factor})${obj.is_isro ? ' [ISRO]' : ''}`,
+          `• ${objectLabel(obj)} @ ${obj.alt_km}km (crossing: ${obj.crossing_factor})${obj.is_isro ? ' [ISRO]' : ''}`,
         ),
         14, y,
       );
@@ -105,7 +139,7 @@ export function generateMissionReport({ waypoints, analysis, missionName, isroMi
   y += 4;
   doc.setTextColor(6, 182, 212);
   doc.setFontSize(10);
-  doc.text('Launch Window Recommendations (Next 7 Days)', 14, y);
+  doc.text('Launch Window Recommendations (simulated, next 7 days)', 14, y);
   y += 8;
   doc.setTextColor(180, 180, 180);
   doc.setFontSize(8);
@@ -121,16 +155,37 @@ export function generateMissionReport({ waypoints, analysis, missionName, isroMi
 
   doc.setTextColor(100, 116, 139);
   doc.setFontSize(7);
-  doc.text('Data: Celestrak TLE - SGP4 - Velocity-aware conjunction analysis', 14, 280);
-  doc.text(`Generated: ${new Date().toISOString()}`, 14, 285);
+  const analyzedAt = analysis?.analyzed_at
+    ? new Date(analysis.analyzed_at).toISOString()
+    : new Date().toISOString();
+  doc.text(
+    pdfSafeText(
+      `Data: ${catalogSourceLabel(catalogSource)} - SGP4 - Heuristic index (not operational Pc/TCA)`,
+    ),
+    14, 275,
+  );
+  doc.text(`Analysis time: ${analyzedAt}`, 14, 280);
+  doc.text(`Report exported: ${new Date().toISOString()}`, 14, 285);
   doc.save(`mission-risk-report-${Date.now()}.pdf`);
 }
 
-export default function ReportButton({ waypoints, analysis, missionName, isroMissions }) {
+export default function ReportButton({
+  waypoints,
+  analysis,
+  missionName,
+  isroMissions,
+  catalogSource,
+}) {
   return (
     <button
       type="button"
-      onClick={() => generateMissionReport({ waypoints, analysis, missionName, isroMissions })}
+      onClick={() => generateMissionReport({
+        waypoints,
+        analysis,
+        missionName,
+        isroMissions,
+        catalogSource,
+      })}
       disabled={!analysis}
       className="btn-outline btn-outline--block"
     >

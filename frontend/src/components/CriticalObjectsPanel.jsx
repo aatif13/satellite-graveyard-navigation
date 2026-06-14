@@ -1,8 +1,9 @@
 function displayName(obj) {
-  const name = obj.name || '';
-  if (name.startsWith('1 ') || name.startsWith('2 ')) {
+  const name = String(obj.name || '').trim();
+  if (/^[12]\s+\d/.test(name)) {
     return obj.norad_id ? `NORAD ${obj.norad_id}` : 'Unknown object';
   }
+  if (name.startsWith('NORAD ')) return name;
   return name || (obj.norad_id ? `NORAD ${obj.norad_id}` : 'Unknown object');
 }
 

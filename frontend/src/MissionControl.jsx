@@ -466,7 +466,13 @@ export default function MissionControl({ onHome }) {
         </div>
 
         <div className="cockpit-footer">
-          <ReportButton waypoints={waypoints} analysis={analysis} missionName={missionName} isroMissions={isroData?.missions} />
+          <ReportButton
+            waypoints={waypoints}
+            analysis={analysis}
+            missionName={missionName}
+            isroMissions={isroData?.missions}
+            catalogSource={catalogSource}
+          />
           <button
             type="button"
             onClick={() => {
